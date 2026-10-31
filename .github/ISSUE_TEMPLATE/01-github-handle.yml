@@ -1,0 +1,46 @@
+name: 🪪 GitHub 핸들 등록
+description: 체크인한 참가자의 GitHub 핸들을 등록합니다.
+title: "[handle] <GitHub 핸들>"
+labels: ["github-handle"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### 청도 바이브코딩 해커톤 — GitHub 핸들 등록
+
+        - 제목과 내용을 수정해서 체크인한 참가자의 GitHub 핸들(가입시 사용한 ID, 이메일 ❌)을 등록해 주세요.
+          - 제목 예시: `[handle] octocat`
+        - 핸들은 `@` 없이 입력하세요.
+
+        아래 QR 코드를 스캔하면 현재 로그인한 계정이 GitHub Copilot 라이센스를 가지고 있는지 확인할 수 있습니다.
+
+        <img src="https://raw.githubusercontent.com/hackersground-kr/hackathon-cheongdo/refs/heads/main/images/ghcp-check.png" alt="GitHub Copilot 라이센스 체크" width="200" />
+
+        위 QR 코드를 스캔한 후 현재 계정의 GitHub Copilot 라이센스 상태를 확인해 주세요.
+
+  - type: input
+    id: handle
+    attributes:
+      label: GitHub 핸들
+      description: 체크인한 참가자의 GitHub 핸들입니다. `@` 없이 입력하세요.
+      placeholder: mona
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: hasGhcpLicense
+    attributes:
+      label: GitHub Copilot 라이센스 여부
+      options:
+        - label: 이 계정에 GitHub Copilot 라이센스가 활성화 되어 있습니다.
+          required: false
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: 아래 내용을 확인한 후 체크하세요
+      options:
+        - label: 입력한 GitHub 핸들은 체크인한 참가자의 GitHub 계정임을 확인했습니다.
+          required: true
+        - label: 이 계정으로 GitHub Copilot 라이센스가 활성화 되어 있다는 것을 확인했습니다.
+          required: true

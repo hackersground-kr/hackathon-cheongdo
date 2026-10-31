@@ -104,10 +104,18 @@ jobs:
               app_details = ""
           acks_block     = section("확인 사항")
 
-          # Count acknowledgement boxes. Template has 3 required checkboxes.
+          required_acks = (
+              "제출한 깃헙 리포지토리 루트에 `PRD.md`와 `TRD.md` 파일이 모두 있습니다.",
+              "배포 URL과 핵심 기능이 로그인이나 별도 자격 증명 없이 공개적으로 접근 가능합니다.",
+              "결과 제출은 최대 2회까지 가능하며, 가장 나중에 제출한 이슈를 기준으로 평가를 수행한다는 것을 이해했습니다.",
+              "제출한 결과는 AI 에이전트가 심사한다는 것을 이해했고, 심사 결과에 승복합니다.",
+          )
+          checked_acks = set(re.findall(
+              r"^[ \t]*-[ \t]*\[[xX]\][ \t]+(.+?)[ \t]*$",
+              acks_block, flags=re.M))
           ticked   = len(re.findall(r"^\s*-\s*\[[xX]\]", acks_block, flags=re.M))
           unticked = len(re.findall(r"^\s*-\s*\[ \]",   acks_block, flags=re.M))
-          acks_ok  = (unticked == 0) and (ticked >= 3)
+          acks_ok  = (unticked == 0) and all(ack in checked_acks for ack in required_acks)
 
           out = pathlib.Path(os.environ["GITHUB_OUTPUT"])
           with out.open("a", encoding="utf-8") as f:
@@ -166,61 +174,106 @@ jobs:
           fi
 
       # ----------------------------------------------------------------------
-      # 3. Repository URL must live under the leader's own account
-      #    (https://github.com/<leader>/<repo>). Strict per the locked spec —
-      #    org-owned repos are rejected and teams should fork to the leader.
+      # 3. Require a public repository root under the leader's own account.
       # ----------------------------------------------------------------------
       - name: Validate repository URL belongs to the leader
+        id: repository
+        env:
+          REPOSITORY_URL: ${{ steps.parse.outputs.repository_url }}
         run: |
-          repo_url="${{ steps.parse.outputs.repository_url }}"
-          # Lowercase for the prefix match so case differences (e.g. Alice vs alice) don't fail.
-          prefix="https://github.com/${AUTHOR,,}/"
-          if [[ "${repo_url,,}" != "$prefix"* ]]; then
+          if ! owner_repo=$(python3 - <<'PY'
+          import os, re
+          from urllib.parse import urlsplit
+
+          url = urlsplit(os.environ["REPOSITORY_URL"])
+          match = re.fullmatch(
+              r"/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?", url.path)
+          if (url.scheme != "https" or url.netloc.lower() != "github.com"
+                  or url.query or url.fragment or not match
+                  or match.group(1).lower() != os.environ["AUTHOR"].lower()):
+              raise SystemExit("Expected a repository root URL under the leader's account.")
+          print(f"{match.group(1)}/{match.group(2)}")
+          PY
+          ); then
               gh issue comment "$ISSUE" --repo "$OWNER/$REPO" \
-                  --body "유효하지 않은 저장소입니다. 저장소 URL은 반드시 \`https://github.com/$AUTHOR/\` (으)로 시작해야 합니다."
+                  --body "저장소 URL은 반드시 리더 본인의 \`https://github.com/$AUTHOR/<저장소>\` 루트 URL이어야 합니다."
               gh issue edit "$ISSUE" --repo "$OWNER/$REPO" --add-label "invalid"
               gh issue close "$ISSUE" --repo "$OWNER/$REPO"
               exit 1
           fi
 
+          if ! metadata=$(gh api "/repos/$owner_repo"); then
+              gh issue comment "$ISSUE" --repo "$OWNER/$REPO" \
+                  --body "GitHub에서 저장소를 조회할 수 없습니다. 공개 저장소 URL을 확인하거나 잠시 후에 다시 시도하세요."
+              gh issue edit "$ISSUE" --repo "$OWNER/$REPO" --add-label "invalid"
+              gh issue close "$ISSUE" --repo "$OWNER/$REPO"
+              exit 1
+          fi
+
+          if ! jq -e --arg author "$AUTHOR" \
+              '.private == false and .owner.type == "User" and
+               ((.owner.login | ascii_downcase) == ($author | ascii_downcase))' \
+              <<< "$metadata" >/dev/null; then
+              gh issue comment "$ISSUE" --repo "$OWNER/$REPO" \
+                  --body "리더 본인의 공개 개인 저장소만 제출할 수 있습니다. 비공개 저장소나 조직 및 다른 계정의 저장소는 허용하지 않습니다."
+              gh issue edit "$ISSUE" --repo "$OWNER/$REPO" --add-label "invalid"
+              gh issue close "$ISSUE" --repo "$OWNER/$REPO"
+              exit 1
+          fi
+
+          printf 'owner_repo=%s\n' "$owner_repo" >> "$GITHUB_OUTPUT"
+
       # ----------------------------------------------------------------------
-      # 4. Commit hash must exist on that repository. `gh api /repos/.../commits/<sha>`
-      #    returns 200 if the SHA resolves (full or short), 422 if not.
+      # 4. Resolve a full or short commit hash to its full SHA, not a branch name.
       # ----------------------------------------------------------------------
       - name: Validate commit hash exists in the repository
+        id: commit
+        env:
+          OWNER_REPO: ${{ steps.repository.outputs.owner_repo }}
+          COMMIT_HASH: ${{ steps.parse.outputs.commit_hash }}
         run: |
-          repo_url="${{ steps.parse.outputs.repository_url }}"
-          commit_hash="${{ steps.parse.outputs.commit_hash }}"
-
-          # Extract owner/repo from the URL. Tolerates an optional trailing slash and `.git`.
-          path=$(echo "$repo_url" | sed -E 's|^https?://github\.com/||; s|/$||; s|\.git$||')
-          owner_repo=$(echo "$path" | cut -d'/' -f1,2)
-
-          if ! gh api "/repos/$owner_repo/commits/$commit_hash" --silent 2>/dev/null; then
+          if [[ ! "$COMMIT_HASH" =~ ^[0-9a-f]+$ ]]; then
               gh issue comment "$ISSUE" --repo "$OWNER/$REPO" \
-                  --body "유효하지 않은 커밋 해시입니다. 커밋 \`$commit_hash\`를 \`$owner_repo\`에서 찾을 수 없습니다."
+                  --body "브랜치 이름 대신 실제 커밋 해시를 입력해야 합니다."
               gh issue edit "$ISSUE" --repo "$OWNER/$REPO" --add-label "invalid"
               gh issue close "$ISSUE" --repo "$OWNER/$REPO"
               exit 1
           fi
+
+          if ! sha=$(gh api "/repos/$OWNER_REPO/commits/$COMMIT_HASH" --jq '.sha'); then
+              gh issue comment "$ISSUE" --repo "$OWNER/$REPO" \
+                  --body "커밋 \`$COMMIT_HASH\`를 \`$OWNER_REPO\`에서 확인할 수 없습니다. 해시를 확인하거나 잠시 후에 다시 시도하세요."
+              gh issue edit "$ISSUE" --repo "$OWNER/$REPO" --add-label "invalid"
+              gh issue close "$ISSUE" --repo "$OWNER/$REPO"
+              exit 1
+          fi
+
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ || "$sha" != "$COMMIT_HASH"* ]]; then
+              gh issue comment "$ISSUE" --repo "$OWNER/$REPO" \
+                  --body "입력한 해시 \`$COMMIT_HASH\`와 일치하는 커밋을 찾을 수 없습니다. 브랜치 이름이 아닌 커밋 해시를 입력하세요."
+              gh issue edit "$ISSUE" --repo "$OWNER/$REPO" --add-label "invalid"
+              gh issue close "$ISSUE" --repo "$OWNER/$REPO"
+              exit 1
+          fi
+
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
 
       # ----------------------------------------------------------------------
       # 5. Both mandatory judging documents must exist as files at the submitted
       #    commit. README.md is optional secondary evidence and is not checked.
       # ----------------------------------------------------------------------
       - name: Validate required judging documents
+        env:
+          OWNER_REPO: ${{ steps.repository.outputs.owner_repo }}
+          COMMIT_HASH: ${{ steps.commit.outputs.sha }}
         run: |
-          repo_url="${{ steps.parse.outputs.repository_url }}"
-          commit_hash="${{ steps.parse.outputs.commit_hash }}"
-          path=$(echo "$repo_url" | sed -E 's|^https?://github\.com/||; s|/$||; s|\.git$||')
-          owner_repo=$(echo "$path" | cut -d'/' -f1,2)
           missing=()
 
           for document in PRD.md TRD.md; do
               if ! document_type=$(gh api \
                   --method GET \
-                  "/repos/$owner_repo/contents/$document" \
-                  -f "ref=$commit_hash" \
+                  "/repos/$OWNER_REPO/contents/$document" \
+                  -f "ref=$COMMIT_HASH" \
                   --jq '.type' 2>/dev/null) || [ "$document_type" != "file" ]; then
                   missing+=("$document")
               fi
@@ -230,7 +283,7 @@ jobs:
               missing_list=$(printf '%s, ' "${missing[@]}")
               missing_list="${missing_list%, }"
               gh issue comment "$ISSUE" --repo "$OWNER/$REPO" \
-                  --body "제출 커밋 \`$commit_hash\`의 저장소 루트에 필수 심사 문서 \`PRD.md\`와 \`TRD.md\`가 모두 파일로 있어야 합니다. 누락되었거나 읽을 수 없는 문서: \`$missing_list\`."
+                  --body "제출 커밋 \`$COMMIT_HASH\`의 저장소 루트에 필수 심사 문서 \`PRD.md\`와 \`TRD.md\`가 모두 파일로 있어야 합니다. 누락되었거나 읽을 수 없는 문서: \`$missing_list\`."
               gh issue edit "$ISSUE" --repo "$OWNER/$REPO" --add-label "invalid"
               gh issue close "$ISSUE" --repo "$OWNER/$REPO"
               exit 1
@@ -272,7 +325,7 @@ jobs:
           fi
 
       # ----------------------------------------------------------------------
-      # 7. All three acknowledgement checkboxes must be ticked.
+      # 7. All four required acknowledgement labels must be present and ticked.
       # ----------------------------------------------------------------------
       - name: Validate acknowledgements
         run: |
@@ -292,6 +345,10 @@ jobs:
       - name: Build API payload
         id: payload
         env:
+          APP_TITLE:   ${{ steps.parse.outputs.app_title }}
+          REPOSITORY_URL: ${{ steps.parse.outputs.repository_url }}
+          COMMIT_HASH: ${{ steps.commit.outputs.sha }}
+          DEPLOYMENT_URL: ${{ steps.parse.outputs.deployment_url }}
           APP_DETAILS: ${{ steps.parse.outputs.app_details }}
           CREATED_AT:  ${{ github.event.issue.created_at }}
         run: |
@@ -303,10 +360,10 @@ jobs:
           fi
 
           payload=$(jq -nc \
-              --arg appTitle      "${{ steps.parse.outputs.app_title }}" \
-              --arg repositoryUrl "${{ steps.parse.outputs.repository_url }}" \
-              --arg commitHash    "${{ steps.parse.outputs.commit_hash }}" \
-              --arg deploymentUrl "${{ steps.parse.outputs.deployment_url }}" \
+              --arg appTitle      "$APP_TITLE" \
+              --arg repositoryUrl "$REPOSITORY_URL" \
+              --arg commitHash    "$COMMIT_HASH" \
+              --arg deploymentUrl "$DEPLOYMENT_URL" \
               "${details_arg[@]}" \
               --arg submittedAt   "$CREATED_AT" \
               '{appTitle: $appTitle, repositoryUrl: $repositoryUrl, commitHash: $commitHash,

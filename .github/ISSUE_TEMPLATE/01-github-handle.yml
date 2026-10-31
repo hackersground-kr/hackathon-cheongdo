@@ -33,7 +33,7 @@ body:
       label: GitHub Copilot 라이센스 여부
       options:
         - label: 이 계정에 GitHub Copilot 라이센스가 활성화 되어 있습니다.
-          required: false
+          required: true
 
   - type: checkboxes
     id: acknowledgements

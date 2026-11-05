@@ -159,18 +159,6 @@ jobs:
               exit 1
           fi
 
-      - name: Validate team size
-        env:
-          MEMBERS_JSON: ${{ steps.parse.outputs.members }}
-        run: |
-          if ! jq -e 'length <= 3' <<< "$MEMBERS_JSON" >/dev/null; then
-              gh issue comment "$ISSUE" --repo "$OWNER/$REPO" \
-                  --body "팀은 리더를 포함해 최대 4명까지 등록할 수 있습니다. 팀원 목록에는 리더를 제외한 최대 3명만 입력한 뒤 새 팀 등록 이슈를 제출해 주세요."
-              gh issue edit "$ISSUE" --repo "$OWNER/$REPO" --add-label "invalid"
-              gh issue close "$ISSUE" --repo "$OWNER/$REPO"
-              exit 1
-          fi
-
       # ----------------------------------------------------------------------
       # 3. Reject if the leader's handle appears in the members list. The form
       #    says the leader doesn't need to be re-entered; treat re-entry as a

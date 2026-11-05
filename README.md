@@ -16,7 +16,6 @@
 - 사용 도구: [VS Code + GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot-chat), [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli), [GitHub Copilot app](https://docs.github.com/copilot/how-tos/github-copilot-app). 타사 AI 코딩 도구는 사용할 수 없습니다.
 - 도전 과제: 행사 당일 공개되는 주제와 안내에 따라 앱을 개발합니다. 아이디어 구체화에 활용할 [청도 사회문제 브리핑](./references/cheongdo-social-issues.md)을 참고해 주세요.
 
-도전 과제의 상세 범위, 개발·제출 규칙, 필수 기술과 Copilot 라이선스 안내, 제출 실패·재제출 처리 기준은 **행사 키노트에서 안내**합니다. 참가 전에 이 README를 확인하고, 대회 진행 시 키노트의 상세 안내를 함께 따라 주세요.
 
 ## 시간 계획
 
